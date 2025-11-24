@@ -1,7 +1,7 @@
 from LiveTradingConfig import *
 from Logger import *
 
-def USDT_SL_TP(options):
+def USDT_SL_TP(options): 
     """TP/SL when base unit is USDT and depends on filled position size."""
     q = round(1 / options['position_size'], 6)
     return SL_mult * q, TP_mult * q
