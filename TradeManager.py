@@ -1,7 +1,7 @@
 from threading import Thread
 import time, os, sys
 from binance import ThreadedWebsocketManager
-from binance.client import Client
+from binance.client import Client 
 from binance.enums import (
     SIDE_SELL, SIDE_BUY,
     FUTURE_ORDER_TYPE_MARKET, FUTURE_ORDER_TYPE_LIMIT,
