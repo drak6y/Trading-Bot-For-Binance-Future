@@ -1,5 +1,5 @@
 API_KEY = ''
-API_SECRET = ''
+API_SECRET = '' 
 
 trading_strategy = 'tripleEMAStochasticRSIATR' # Strategy (options: 'StochRSIMACD','tripleEMAStochasticRSIATR','tripleEMA','breakout','stochBB','goldenCross','candle_wick','fibMACD','EMA_cross','heikin_ashi_ema2','heikin_ashi_ema','ema_crossover')
 TP_SL_choice = '%' 					# TP/SL base unit (options: 'USDT','%','x (ATR)','x (Swing High/Low) level 1','x (Swing High/Low) level 2','x (Swing High/Low) level 3','x (Swing Close) level 1','x (Swing Close) level 2','x (Swing Close) level 3')
