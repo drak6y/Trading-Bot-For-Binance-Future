@@ -2,7 +2,7 @@ import os, sys, time, math
 from binance.client import Client
 from binance import ThreadedWebsocketManager
 import BotClass
-from LiveTradingConfig import *
+from LiveTradingConfig import * 
 from Logger import *
 
 def convert_buffer_to_string(buffer_int):
