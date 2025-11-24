@@ -2,7 +2,7 @@
 
 Technical-analysis–driven crypto trading bot for **Binance Futures**.
 
-## Status
+## Status 
 - **OS**: Windows 7,8,10,11 only
 - **Time sync (critical for live trading on Windows):** Configure Windows to sync time daily or Binance may reject orders due to timestamp drift. Example guide: https://www.makeuseof.com/tag/synchronise-computer-time-internet-custom-schedule-windows-7/#:~:text=Go%20to%20%3E%20Start%20and%20type,on%20the%20right%20hand%20side
 
