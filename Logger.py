@@ -3,7 +3,7 @@ import os
 import sys
 
 _initialized = False
-
+ 
 def _setup_environment():
     global _initialized
     if _initialized:
