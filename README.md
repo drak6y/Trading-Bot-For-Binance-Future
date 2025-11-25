@@ -1,6 +1,6 @@
 # Binance Futures Trading Bot (Python)
 
-Technical-analysis–driven crypto trading bot for **Binance Futures**.
+Technical-analysis–driven crypto trading bot for **Binance Futures**. 
 
 ## Status
 - **OS**: Windows 7,8,10,11 only
