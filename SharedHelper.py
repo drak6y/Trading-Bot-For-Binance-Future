@@ -1,6 +1,6 @@
 import os, sys
 from Logger import *
-import numpy as np
+import numpy as np 
 import BotClass
 
 def get_all_symbols(client, coin_exclusion_list):
