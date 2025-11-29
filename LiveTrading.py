@@ -31,7 +31,15 @@ if __name__ == '__main__':
         
         log.info('Connecting to Binance API...')
         python_binance_client = Client(api_key=API_KEY, api_secret=API_SECRET)
-        client = CustomClient(python_binance_client)
+        
+        if DEMO_MODE:
+            log.info(f"--- DEMO MODE ENABLED ---")
+            log.info(f"Initial Balance: {INITIAL_DEMO_BALANCE} USDT")
+            trading_client = PaperTradingClient(python_binance_client, INITIAL_DEMO_BALANCE)
+        else:
+            trading_client = python_binance_client
+
+        client = CustomClient(trading_client)
         
         if trade_all_symbols: symbols_to_trade = SharedHelper.get_all_symbols(python_binance_client, coin_exclusion_list)
         client.set_leverage(symbols_to_trade)
@@ -40,10 +48,10 @@ if __name__ == '__main__':
         client.start_websockets(Bots)
         
         if use_multiprocessing_for_trade_execution:
-            new_trade_loop = multiprocessing.Process(target=start_new_trades_loop_multiprocess, args=(python_binance_client, signal_queue, print_trades_q))
+            new_trade_loop = multiprocessing.Process(target=start_new_trades_loop_multiprocess, args=(trading_client, signal_queue, print_trades_q))
             new_trade_loop.start()
         else:
-            TM = TradeManager(python_binance_client, signal_queue, print_trades_q)
+            TM = TradeManager(trading_client, signal_queue, print_trades_q)
             new_trade_loop = Thread(target=TM.new_trades_loop, daemon=True)
             new_trade_loop.start()
         

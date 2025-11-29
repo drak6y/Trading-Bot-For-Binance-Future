@@ -4,6 +4,269 @@ from binance.client import Client
 from binance import ThreadedWebsocketManager
 import BotClass 
 from LiveTradingConfig import *
+import json
+from datetime import datetime
+
+class PaperTradingClient:
+    def __init__(self, real_client: Client, initial_balance: float):
+        self.real_client = real_client
+        self.balance = initial_balance
+        self.positions = {}  # {symbol: {'amount': float, 'entry_price': float, 'side': str}}
+        self.orders = {}     # {orderId: {symbol, side, type, price, stopPrice, quantity, ...}}
+        self.order_counter = 1000
+        self.trade_history = []
+        self.log_file = 'trades_demo.json'
+
+    def _log_trade(self, trade_info):
+        self.trade_history.append(trade_info)
+        if log_to_file:
+            try:
+                with open(self.log_file, 'w') as f:
+                    json.dump(self.trade_history, f, indent=4)
+            except Exception as e:
+                log.error(f"PaperTradingClient - Failed to write log: {e}")
+
+    # --- Pass-through Read Methods ---
+    def futures_exchange_info(self): return self.real_client.futures_exchange_info()
+    def futures_historical_klines(self, *args, **kwargs): return self.real_client.futures_historical_klines(*args, **kwargs)
+    def futures_symbol_ticker(self, **kwargs): return self.real_client.futures_symbol_ticker(**kwargs)
+    def futures_order_book(self, **kwargs): return self.real_client.futures_order_book(**kwargs)
+    def futures_ping(self): return self.real_client.futures_ping()
+    def futures_change_leverage(self, **kwargs): pass # Mock leverage change
+
+    # --- Mocked Write/Account Methods ---
+    def futures_account_balance(self):
+        return [{'asset': 'USDT', 'balance': str(self.balance), 'withdrawAvailable': str(self.balance)}]
+
+    def futures_account(self):
+        # Used for margin check
+        return {
+            'totalMarginBalance': str(self.balance),
+            'totalWalletBalance': str(self.balance),
+            'availableBalance': str(self.balance)
+        }
+
+    def futures_position_information(self, symbol=None):
+        res = []
+        # If symbol is specific, return just that one (or empty list if not found? API returns list)
+        # If symbol is None, return all non-zero positions? API returns all symbols.
+        
+        # We need to return a list of dicts matching Binance structure
+        # We can fetch all symbols from real client to get structure, but that's slow.
+        # We'll just return the ones we have active, plus the requested one if empty.
+        
+        if symbol:
+            pos = self.positions.get(symbol, {'amount': 0.0, 'entry_price': 0.0, 'unRealizedProfit': 0.0, 'cum_commission': 0.0})
+            # Calculate unrealized PnL
+            pnl = 0.0
+            if pos['amount'] != 0:
+                current_price = float(self.real_client.futures_symbol_ticker(symbol=symbol)['price'])
+                if pos['amount'] > 0:
+                    pnl = (current_price - pos['entry_price']) * abs(pos['amount'])
+                else:
+                    pnl = (pos['entry_price'] - current_price) * abs(pos['amount'])
+            
+            return [{
+                'symbol': symbol,
+                'positionAmt': str(pos['amount']),
+                'entryPrice': str(pos['entry_price']),
+                'markPrice': str(self.real_client.futures_symbol_ticker(symbol=symbol)['price']),
+                'unRealizedProfit': str(pnl),
+                'liquidationPrice': '0',
+                'leverage': str(leverage),
+                'maxNotionalValue': '10000000',
+                'marginType': 'cross',
+                'isolatedMargin': '0',
+                'isAutoAddMargin': 'false',
+                'positionSide': 'BOTH',
+                'notional': str(pos['amount'] * float(self.real_client.futures_symbol_ticker(symbol=symbol)['price'])),
+                'cum_commission': pos.get('cum_commission', 0.0)
+            }]
+        else:
+            # Return all active positions
+            ret = []
+            for sym, pos in self.positions.items():
+                if pos['amount'] == 0: continue
+                current_price = float(self.real_client.futures_symbol_ticker(symbol=sym)['price'])
+                pnl = 0.0
+                if pos['amount'] > 0:
+                    pnl = (current_price - pos['entry_price']) * abs(pos['amount'])
+                else:
+                    pnl = (pos['entry_price'] - current_price) * abs(pos['amount'])
+                
+                ret.append({
+                    'symbol': sym,
+                    'positionAmt': str(pos['amount']),
+                    'entryPrice': str(pos['entry_price']),
+                    'markPrice': str(current_price),
+                    'unRealizedProfit': str(pnl),
+                    'notional': str(pos['amount'] * current_price),
+                    'cum_commission': pos.get('cum_commission', 0.0)
+                })
+            return ret
+
+    def futures_create_order(self, **kwargs):
+        self.order_counter += 1
+        oid = self.order_counter
+        symbol = kwargs['symbol']
+        side = kwargs['side']
+        type = kwargs['type']
+        qty = float(kwargs['quantity'])
+        price = float(kwargs.get('price', 0))
+        stop_price = float(kwargs.get('stopPrice', 0))
+        
+        # Simulate MARKET order immediately
+        if type == 'MARKET':
+            # Fetch current price
+            curr_price = float(self.real_client.futures_symbol_ticker(symbol=symbol)['price'])
+            # Market orders are Taker (0.05%)
+            self._execute_trade(symbol, side, qty, curr_price, fee_rate=0.0005)
+            return {'orderId': oid, 'status': 'FILLED', 'avgPrice': str(curr_price), 'executedQty': str(qty), 'cumQuote': str(curr_price*qty)}
+        
+        # Store LIMIT/STOP orders
+        self.orders[oid] = {
+            'orderId': oid,
+            'symbol': symbol,
+            'side': side,
+            'type': type,
+            'quantity': qty,
+            'price': price,
+            'stopPrice': stop_price,
+            'status': 'NEW',
+            'reduceOnly': kwargs.get('reduceOnly', False),
+            'origType': type
+        }
+        log.info(f"PaperTrading - Order Placed: {symbol} {side} {type} Qty:{qty} Price:{price} Stop:{stop_price}")
+        return {'orderId': oid, 'status': 'NEW'}
+
+    def _execute_trade(self, symbol, side, qty, price, fee_rate=0.0005):
+        # Update position
+        pos = self.positions.get(symbol, {'amount': 0.0, 'entry_price': 0.0, 'cum_commission': 0.0})
+        current_amt = pos['amount']
+        
+        # Calculate Commission
+        commission = price * qty * fee_rate
+        self.balance -= commission
+        pos['cum_commission'] = pos.get('cum_commission', 0.0) + commission
+
+        new_amt = current_amt
+        if side == 'BUY':
+            new_amt += qty
+        else:
+            new_amt -= qty
+            
+        # Calculate average entry price if increasing position
+        if (current_amt > 0 and side == 'BUY') or (current_amt < 0 and side == 'SELL'):
+            total_cost = (abs(current_amt) * pos['entry_price']) + (qty * price)
+            new_entry = total_cost / abs(new_amt)
+            pos['entry_price'] = new_entry
+        elif current_amt == 0:
+            pos['entry_price'] = price
+        else:
+            # Closing position (partial or full) - Realize PnL
+            # PnL = (Exit Price - Entry Price) * Qty * Direction
+            direction = 1 if current_amt > 0 else -1
+            closed_qty = min(abs(current_amt), qty)
+            pnl = (price - pos['entry_price']) * closed_qty * direction
+            self.balance += pnl
+            self._log_trade({'symbol': symbol, 'side': side, 'price': price, 'qty': closed_qty, 'pnl': pnl, 'commission': commission, 'time': str(datetime.now())})
+            log.info(f"PaperTrading - Trade Executed: {symbol} {side} @ {price}. PnL: {pnl:.2f}. Comm: {commission:.4f}. New Balance: {self.balance:.2f}")
+            
+            if abs(new_amt) < 0.00000001: # Close enough to zero
+                new_amt = 0
+                pos['entry_price'] = 0
+                pos['cum_commission'] = 0 # Reset commission for closed position
+
+        pos['amount'] = new_amt
+        self.positions[symbol] = pos
+
+    def futures_cancel_all_open_orders(self, symbol=None):
+        to_delete = []
+        for oid, order in self.orders.items():
+            if symbol is None or order['symbol'] == symbol:
+                to_delete.append(oid)
+        for oid in to_delete:
+            del self.orders[oid]
+
+    def futures_get_open_orders(self, symbol=None):
+        ret = []
+        for oid, order in self.orders.items():
+            if symbol is None or order['symbol'] == symbol:
+                ret.append(order)
+        return ret
+
+    def check_orders(self, symbol, current_price):
+        """Check if any pending orders should be filled based on current price."""
+        filled_orders = []
+        to_delete = []
+        
+        for oid, order in self.orders.items():
+            if order['symbol'] != symbol: continue
+            
+            triggered = False
+            side = order['side']
+            price = order['price']
+            stop_price = order['stopPrice']
+            qty = order['quantity']
+            
+            # STOP_MARKET
+            if order['type'] == 'STOP_MARKET':
+                if (side == 'SELL' and current_price <= stop_price) or \
+                   (side == 'BUY' and current_price >= stop_price):
+                    triggered = True
+            
+            # TAKE_PROFIT (Limit) or TRAILING_STOP_MARKET (simplified as TP)
+            elif order['type'] == 'TAKE_PROFIT':
+                if (side == 'SELL' and current_price >= price) or \
+                   (side == 'BUY' and current_price <= price): # Wait, TP for Long is Sell at Higher Price
+                       # If Long, we Sell. Price > Entry.
+                       # If Short, we Buy. Price < Entry.
+                       # Binance TP is a Limit order usually? Or Stop?
+                       # Code uses FUTURE_ORDER_TYPE_TAKE_PROFIT with price and stopPrice equal.
+                       # It acts like a Stop Limit or Stop Market.
+                       # Let's assume it triggers if price touches it.
+                       if (side == 'SELL' and current_price >= stop_price) or \
+                          (side == 'BUY' and current_price <= stop_price):
+                           triggered = True
+
+            # LIMIT
+            elif order['type'] == 'LIMIT':
+                 if (side == 'BUY' and current_price <= price) or \
+                    (side == 'SELL' and current_price >= price):
+                     triggered = True
+            
+            if triggered:
+                # Execute
+                # Calculate PnL for this specific fill?
+                # We need to know the entry price of the position to calc RP (Realized Profit) for the callback
+                # But _execute_trade calculates PnL based on average entry.
+                
+                # Determine Fee Rate
+                # LIMIT orders sitting on book are Maker (0.02%)
+                # STOP_MARKET / TAKE_PROFIT are Taker (0.05%)
+                fee_rate = 0.0005
+                if order['type'] == 'LIMIT':
+                    fee_rate = 0.0002
+                
+                # Capture balance before
+                bal_before = self.balance
+                self._execute_trade(symbol, side, qty, current_price, fee_rate=fee_rate)
+                bal_after = self.balance
+                pnl = bal_after - bal_before
+                
+                filled_orders.append({
+                    'oid': oid,
+                    'symbol': symbol,
+                    'rp': pnl,
+                    'side': side,
+                    'price': current_price
+                })
+                to_delete.append(oid)
+        
+        for oid in to_delete:
+            del self.orders[oid]
+            
+        return filled_orders
 
 
 def convert_buffer_to_string(buffer_int):

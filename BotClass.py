@@ -186,6 +186,11 @@ class Bot:
                     if self.add_hist_complete:
                         self.generate_new_heikin_ashi()
                         d, sl, tp = self.make_decision()
+                        
+                        # --- LOGGING DECISION ---
+                        log.debug(f"Bot {self.symbol} - Price: {k['c']} | Decision: {d} (1=Long, 0=Short, -99=None) | SL: {sl}, TP: {tp}")
+                        # ------------------------
+
                         if d != -99:
                             self.signal_queue.put([self.symbol, self.OP, self.CP, self.tick_size, d, self.index, sl, tp])
                         if closed: self.remove_first_candle()

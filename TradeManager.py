@@ -37,11 +37,53 @@ class TradeManager:
         self.number_of_losses = 0
 
         Thread(target=self.check_threshold_loop, daemon=True).start()
-        self.twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=API_SECRET)
-        self.twm.start()
-        self.user_socket = self.twm.start_futures_user_socket(callback=self.monitor_trades)
+        
+        if not DEMO_MODE:
+            self.twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=API_SECRET)
+            self.twm.start()
+            self.user_socket = self.twm.start_futures_user_socket(callback=self.monitor_trades)
+        else:
+            log.info("TradeManager - DEMO MODE ACTIVE: Starting simulated monitor loop")
+            Thread(target=self.demo_monitor_loop, daemon=True).start()
+            
         Thread(target=self.log_trades_loop, daemon=True).start()
         Thread(target=self.monitor_orders_by_polling_api, daemon=True).start()
+
+    def demo_monitor_loop(self):
+        """Simulate WebSocket updates by checking price against orders."""
+        while True:
+            time.sleep(1) # Check every second
+            try:
+                # We need to check orders for all active symbols
+                # But PaperTradingClient needs to know which symbols to check?
+                # We can just iterate active trades
+                for t in self.active_trades:
+                    # Get current price
+                    try:
+                        ticker = self.client.futures_symbol_ticker(symbol=t.symbol)
+                        current_price = float(ticker['price'])
+                        
+                        # Check for fills in PaperTradingClient
+                        # We assume self.client is PaperTradingClient in Demo Mode
+                        if hasattr(self.client, 'check_orders'):
+                            filled = self.client.check_orders(t.symbol, current_price)
+                            for f in filled:
+                                # Construct fake msg
+                                msg = {
+                                    'e': 'ORDER_TRADE_UPDATE',
+                                    'o': {
+                                        's': t.symbol,
+                                        'X': 'FILLED',
+                                        'rp': str(f['rp']),
+                                        'i': f['oid']
+                                    }
+                                }
+                                self.monitor_trades(msg)
+                    except Exception as e:
+                        log.warning(f"demo_monitor_loop - Error checking {t.symbol}: {e}")
+                        
+            except Exception as e:
+                log.error(f"demo_monitor_loop - Critical Error: {e}")
 
     def monitor_orders_by_polling_api(self):
         """Poll open positions to attach TP/SL when fills happen during packet loss."""
@@ -286,7 +328,7 @@ class TradeManager:
                 win_loss = 'Not available yet'
                 if self.number_of_losses: win_loss = round(self.number_of_wins / self.number_of_losses, 4)
                 if positions:
-                    info = {'Symbol': [], 'Position Size': [], 'Direction': [], 'Entry Price': [], 'Market Price': [], 'TP': [], 'SL': [], 'Distance to TP (%)': [], 'Distance to SL (%)': [], 'PNL': []}
+                    info = {'Symbol': [], 'Position Size': [], 'Direction': [], 'Entry Price': [], 'Market Price': [], 'TP': [], 'SL': [], 'Distance to TP (%)': [], 'Distance to SL (%)': [], 'PNL': [], 'Commission': []}
                     orders = self.client.futures_get_open_orders()
                     tps = {f'{o["symbol"]}_TP': float(o['price']) for o in orders if o.get('reduceOnly') is True and o['type'] == 'TAKE_PROFIT'}
                     sls = {f'{o["symbol"]}_SL': float(o['stopPrice']) for o in orders if o['origType'] == 'STOP_MARKET'}
@@ -304,6 +346,7 @@ class TradeManager:
                         info['Distance to TP (%)'].append(round(abs((mp - tpv) / mp * 100), 3) if tpv else 'Not available yet')
                         info['Distance to SL (%)'].append(round(abs((mp - slv) / mp * 100), 3) if slv else 'Not available yet')
                         info['PNL'].append(float(p['unRealizedProfit']))
+                        info['Commission'].append(round(float(p.get('cum_commission', 0)), 4))
                     log.info(f'Balance: ${round(self.get_account_balance() or 0, 3)}, Total PnL: ${round(self.total_profit, 3)}, Unrealized: ${round(sum(info["PNL"]),3)}, Wins: {self.number_of_wins}, Losses: {self.number_of_losses}, W/L: {win_loss}, Open: {len(info["Symbol"])}\n' + tabulate(info, headers='keys', tablefmt='github'))
                 else:
                     log.info(f'Balance: ${round(self.get_account_balance() or 0, 3)}, Total PnL: ${round(self.total_profit, 3)}, Wins: {self.number_of_wins}, Losses: {self.number_of_losses}, W/L: {win_loss}, No Open Positions')
